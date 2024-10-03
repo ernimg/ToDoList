@@ -1,0 +1,58 @@
+import pika
+import json
+import subprocess
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.common.by import By
+from webdriver_manager.chrome import ChromeDriverManager
+
+# Ustawienia połączenia z RabbitMQ
+rabbitmq_host = '10.144.22.4'  # Zmień na odpowiedni adres IP RabbitMQ
+rabbitmq_user = 'admin'        # Zmień na odpowiednią nazwę użytkownika
+rabbitmq_password = '123456'   # Zmień na odpowiednie hasło
+
+def callback(ch, method, properties, body):
+    # Funkcja, która obsługuje przychodzące wiadomości
+    print(" [x] Otrzymano zadanie: %r" % body)
+    
+    # Dekodujemy wiadomość do formatu JSON
+    message = json.loads(body.decode())
+    
+    # Odczytujemy poszczególne parametry
+    file_path = message.get('filePath')
+    redmine_number = message.get('redmineNumber')
+    server_ip = message.get('serverIP')
+    
+    print(f"Plik: {file_path}, Redmine: {redmine_number}, Serwer: {server_ip}")
+    
+    # Uruchamiamy przeglądarkę za pomocą Selenium WebDriver
+    open_wp_website()
+
+def open_wp_website():
+    print("Uruchamiam Selenium WebDriver i otwieram wp.pl")
+
+    # Inicjalizacja WebDrivera - automatyczne pobranie ChromeDriver za pomocą webdriver_manager
+    driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()))
+
+    # Otwieranie strony wp.pl
+    driver.get("https://www.wp.pl")
+
+    # Możesz wykonać dodatkowe operacje na stronie, np. wyszukiwanie elementów
+    print("Tytuł strony: ", driver.title)
+
+    # Zakończenie pracy WebDrivera
+    driver.quit()
+
+# Ustawienie połączenia z RabbitMQ
+credentials = pika.PlainCredentials(rabbitmq_user, rabbitmq_password)
+connection = pika.BlockingConnection(pika.ConnectionParameters(host=rabbitmq_host, credentials=credentials))
+channel = connection.channel()
+
+# Deklaracja kolejki, na której nasłuchujemy
+channel.queue_declare(queue='task_queue', durable=True)
+
+# Powiązanie funkcji callback z odbieraniem wiadomości
+channel.basic_consume(queue='task_queue', on_message_callback=callback, auto_ack=True)
+
+print(' [*] Oczekiwanie na zadania. Aby przerwać, naciśnij CTRL+C')
+channel.start_consuming()

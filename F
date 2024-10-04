@@ -1,0 +1,77 @@
+const { Client } = require('ssh2');
+
+function runScriptOverSSH(serverConfig, scriptPath, redmine) {
+  return new Promise((resolve, reject) => {
+    const connection = new Client();
+
+    connection.on('ready', () => {
+      console.log('[x] -> Połączenie SSH gotowe');
+      console.log('redmine przekazany:', redmine);
+      const command = `python ${scriptPath} ${redmine}`;
+
+      // Wykonujemy komendę na zdalnym serwerze
+      connection.exec(command, { timeout: 30000 }, (err, stream) => {
+        if (err) {
+          console.error('Błąd podczas wykonania komendy:', err);
+          connection.end(); // Zamykanie połączenia SSH
+          return reject(err);
+        }
+
+        // Obsługa zamknięcia strumienia (zakończenie skryptu Python)
+        stream.on('close', (code, signal) => {
+          console.log('[x] -> Stream zamknięty z code:', code, 'signal:', signal);
+          connection.end(); // Zamykanie połączenia SSH po zakończeniu
+          if (code === 0) {
+            resolve(); // Zwracamy pomyślne wykonanie Promise
+          } else {
+            reject(new Error(`Skrypt zakończył się z błędem kod ${code}`));
+          }
+        });
+
+        // Obsługa danych z stdout
+        stream.on('data', (data) => {
+          console.log('STDOUT:', data.toString());
+        });
+
+        // Obsługa błędów z stderr
+        stream.stderr.on('data', (data) => {
+          console.log('STDERR:', data.toString());
+        });
+
+        // Obsługa błędu strumienia
+        stream.on('error', (err) => {
+          console.error('Błąd strumienia:', err);
+          connection.end();
+          reject(err);
+        });
+      });
+    });
+
+    // Obsługa błędów połączenia SSH
+    connection.on('error', (err) => {
+      console.error('Błąd połączenia SSH:', err);
+      reject(err); // Odrzucamy Promise w przypadku błędu
+    });
+
+    // Koniec połączenia
+    connection.on('end', () => {
+      console.log('Połączenie SSH zakończone');
+    });
+
+    // Połączenie nieoczekiwanie zerwane
+    connection.on('close', (hadError) => {
+      if (hadError) {
+        console.error('Połączenie zostało nieoczekiwanie zamknięte z błędem.');
+      } else {
+        console.log('Połączenie zamknięte bez błędów.');
+      }
+    });
+
+    // Ustawienia połączenia SSH z keep-alive
+    connection.connect({
+      ...serverConfig,
+      keepaliveInterval: 10000,  // Utrzymywanie aktywnego połączenia
+      readyTimeout: 20000        // Timeout na nawiązanie połączenia
+    });
+  });
+}

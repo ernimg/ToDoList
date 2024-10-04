@@ -1,0 +1,105 @@
+function runScriptOverSSH(serverConfig, scriptPath, redmine) {
+    return new Promise((resolve, reject) => {
+        const connection = new Client();  // Zakładam, że korzystasz z ssh2
+
+        connection.on('ready', () => {
+            console.log('[x] -> Połączenie SSH gotowe');
+            console.log('redmine przekazany:', redmine);
+            const command = `python ${scriptPath} ${redmine}`;
+
+            connection.exec(command, (err, stream) => {
+                if (err) {
+                    connection.end();
+                    return reject(err);
+                }
+
+                // Obsługa zamknięcia streamu (zakończenie skryptu Python)
+                stream.on('close', (code, signal) => {
+                    console.log('[x] -> Stream zamknięty z code: ', code, 'signal: ', signal);
+                    connection.end();  // Zamykamy połączenie SSH
+                    resolve();  // Zwracamy pomyślne wykonanie Promise
+                });
+
+                // Obsługa danych z stdout
+                stream.on('data', (data) => {
+                    console.log('STDOUT:', data.toString());
+                });
+
+                // Obsługa błędów z stderr
+                stream.stderr.on('data', (data) => {
+                    console.log('STDERR:', data.toString());
+                });
+            });
+        })
+        // Obsługa błędów połączenia SSH
+        .on('error', (err) => {
+            console.error('Błąd połączenia SSH:', err);
+            reject(err);  // Odrzucamy Promise w przypadku błędu
+        })
+        .connect(serverConfig);
+    });
+}
+
+async function startConsumer() {
+    try {
+        const connection = await amqp.connect({
+            protocol: 'amqp',
+            hostname: '10.144.22.4',
+            port: 5672,
+            username: 'rms_api',
+            password: '123456Aa#',
+            vhost: '/',
+            heartbeat: 60
+        });
+
+        const channel = await connection.createChannel();
+        const queue = 'task_queue';
+
+        await channel.assertQueue(queue, { durable: true });
+
+        // Odbieranie zadań z kolejki
+        channel.consume(queue, async (msg) => {
+            if (msg !== null) {
+                const task = JSON.parse(msg.content);
+                console.log('[x] -> Odebrano zadanie:', task);
+
+                const serverConfig = {
+                    host: task.server,
+                    port: 22,
+                    username: '110003',
+                    password: 'Fenego#1'
+                };
+
+                console.log(serverConfig);
+
+                try {
+                    console.log('Działam');
+                    // Uruchamiamy zdalnie skrypt przez SSH
+                    await runScriptOverSSH(serverConfig, task.scriptPath, task.redmineId);
+                    console.log('[x] -> Wykonanie zadania');
+
+                    // Po zakończeniu zadania potwierdzamy odbiór wiadomości
+                    channel.ack(msg);
+                } catch (error) {
+                    console.error('Coś poszło nie tak w realizacji skryptu:', error);
+                    // Jeśli coś poszło nie tak, odrzucamy wiadomość
+                    channel.nack(msg);
+                }
+            }
+        });
+
+        // Obsługa zamykania kanału i połączenia RabbitMQ po zakończeniu
+        process.on('SIGINT', async () => {
+            console.log('[x] -> Zamykam połączenie');
+            await channel.close();
+            await connection.close();
+            process.exit(0);
+        });
+
+    } catch (error) {
+        console.error('Błąd połączenia z RabbitMQ:', error);
+    }
+}
+
+// Wywołanie głównej funkcji konsumera
+startConsumer();
